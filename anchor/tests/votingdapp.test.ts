@@ -1,145 +1,93 @@
-import {
-  Blockhash,
-  createSolanaClient,
-  createTransaction,
-  generateKeyPairSigner,
-  Instruction,
-  isSolanaError,
-  KeyPairSigner,
-  signTransactionMessageWithSigners,
-} from 'gill'
-import {
-  fetchVotingdapp,
-  getCloseInstruction,
-  getDecrementInstruction,
-  getIncrementInstruction,
-  getInitializeInstruction,
-  getSetInstruction,
-} from '../src'
-// @ts-ignore error TS2307 suggest setting `moduleResolution` but this is already configured
-import { loadKeypairSignerFromFile } from 'gill/node'
+import * as anchor from '@coral-xyz/anchor';
+import { Program } from '@coral-xyz/anchor';
+import { PublicKey } from '@solana/web3.js';
+import { Votingdapp } from '../target/types/votingdapp';
+import { describe, expect, it } from 'vitest';
 
-const { rpc, sendAndConfirmTransaction } = createSolanaClient({ urlOrMoniker: process.env.ANCHOR_PROVIDER_URL! })
 
-describe('votingdapp', () => {
-  let payer: KeyPairSigner
-  let votingdapp: KeyPairSigner
+const IDL = require('../target/idl/votingdapp.json');
+const votingAddress = new PublicKey("Ce4pzpmBmTCwvvBLLtX73FUnALfMfBYqNkr2sibKTZML");
 
-  beforeAll(async () => {
-    votingdapp = await generateKeyPairSigner()
-    payer = await loadKeypairSignerFromFile(process.env.ANCHOR_WALLET!)
+
+describe('Voting', () => {
+
+  anchor.setProvider(anchor.AnchorProvider.env());
+
+  const votingProgram = anchor.workspace.Votingdapp as Program<Votingdapp>;
+
+  it('Initialize Poll', async () => {
+
+    await votingProgram.methods.initializePoll(
+      new anchor.BN(1),
+      "What is your Favourite type of Peanut Butter",
+      new anchor.BN(0),
+      new anchor.BN(1766823133),
+      new anchor.BN(1),
+    ).rpc();
+
+
+    const [pollAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8),], votingAddress
+    );
+
+    const poll = await votingProgram.account.poll.fetch(pollAddress);
+    console.log(poll);
+
+    expect(poll.pollId.toNumber()).toEqual(1);
+    expect(poll.description).to.equal("What is your Favourite type of Peanut Butter");
+    expect(poll.pollStart.toNumber()).toBeLessThan(poll.pollEnd.toNumber());
+
+  });
+
+  it('Initialize Candidate', async () => {
+    await votingProgram.methods.initializeCandidate(
+      "Smoothie",
+      new anchor.BN(1),
+    ).rpc();
+
+    const [smoothieAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8), Buffer.from("Smoothie")],
+      votingAddress
+    );
+
+    const smoothieCandidate = await votingProgram.account.candidate.fetch(smoothieAddress);
+    console.log(smoothieCandidate);
+
+
+    await votingProgram.methods.initializeCandidate(
+      "Crunchy",
+      new anchor.BN(1),
+    ).rpc();
+
+
+    const [crunchyAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8), Buffer.from("Crunchy")],
+      votingAddress
+    );
+
+    const crunchyCandidate = await votingProgram.account.candidate.fetch(crunchyAddress);
+    console.log(crunchyCandidate);
+
+    expect(crunchyCandidate.candidateVotes.toNumber()).toEqual(0);
+    expect(smoothieCandidate.candidateVotes.toNumber()).toEqual(0);
+
   })
 
-  it('Initialize Votingdapp', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getInitializeInstruction({ payer: payer, votingdapp: votingdapp })
+  it('Vote for Candidate', async () => {
+    await votingProgram.methods.vote(
+      "Smoothie",
+      new anchor.BN(1),
+    ).rpc();
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+    const [smoothieAddress] = PublicKey.findProgramAddressSync( //To find the address of the candidate and know what the vote is doing
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8), Buffer.from("Smoothie")],
+      votingAddress
+    );
 
-    // ASSER
-    const currentVotingdapp = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentVotingdapp.data.count).toEqual(0)
+    const smoothieCandidate = await votingProgram.account.candidate.fetch(smoothieAddress);
+    console.log(smoothieCandidate);
+
+    expect(smoothieCandidate.candidateVotes.toNumber()).toEqual(1);
+
   })
-
-  it('Increment Votingdapp', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getIncrementInstruction({
-      votingdapp: votingdapp.address,
-    })
-
-    // ACT
-    await sendAndConfirm({ ix, payer })
-
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(1)
-  })
-
-  it('Increment Votingdapp Again', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getIncrementInstruction({ votingdapp: votingdapp.address })
-
-    // ACT
-    await sendAndConfirm({ ix, payer })
-
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(2)
-  })
-
-  it('Decrement Votingdapp', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getDecrementInstruction({
-      votingdapp: votingdapp.address,
-    })
-
-    // ACT
-    await sendAndConfirm({ ix, payer })
-
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(1)
-  })
-
-  it('Set votingdapp value', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getSetInstruction({ votingdapp: votingdapp.address, value: 42 })
-
-    // ACT
-    await sendAndConfirm({ ix, payer })
-
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(42)
-  })
-
-  it('Set close the votingdapp account', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getCloseInstruction({
-      payer: payer,
-      votingdapp: votingdapp.address,
-    })
-
-    // ACT
-    await sendAndConfirm({ ix, payer })
-
-    // ASSERT
-    try {
-      await fetchVotingdapp(rpc, votingdapp.address)
-    } catch (e) {
-      if (!isSolanaError(e)) {
-        throw new Error(`Unexpected error: ${e}`)
-      }
-      expect(e.message).toEqual(`Account not found at address: ${votingdapp.address}`)
-    }
-  })
-})
-
-// Helper function to keep the tests DRY
-let latestBlockhash: Awaited<ReturnType<typeof getLatestBlockhash>> | undefined
-async function getLatestBlockhash(): Promise<Readonly<{ blockhash: Blockhash; lastValidBlockHeight: bigint }>> {
-  if (latestBlockhash) {
-    return latestBlockhash
-  }
-  return await rpc
-    .getLatestBlockhash()
-    .send()
-    .then(({ value }) => value)
-}
-async function sendAndConfirm({ ix, payer }: { ix: Instruction; payer: KeyPairSigner }) {
-  const tx = createTransaction({
-    feePayer: payer,
-    instructions: [ix],
-    version: 'legacy',
-    latestBlockhash: await getLatestBlockhash(),
-  })
-  const signedTransaction = await signTransactionMessageWithSigners(tx)
-  return await sendAndConfirmTransaction(signedTransaction)
-}
+});
